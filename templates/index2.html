@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Building Counting Kota Malang dan Sekitarnya</title>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCR8NPCrMNyMXWM-cSJeo2Y7WqH_2pc8CQ&libraries=drawing,places"></script>
+    <style>
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+        #control-panel {
+            margin: 10px 0;
+        }
+        #location-selector {
+            margin: 10px 0;
+            padding: 5px;
+            width: 300px;
+        }
+        #search-box {
+            margin: 10px 0;
+            padding: 5px;
+            width: 300px;
+        }
+
+        #result-container {
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+        }
+        #result-label {
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        #result-box {
+            padding: 5px;
+            border: 1px solid #ccc;
+            background-color: #f9f9f9;
+            min-width: 120px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>Building Counting for Kota Malang dan Sekitarnya</h1>
+    <div id="control-panel">
+        <select id="location-selector">
+            <option value="malang_city.gpkg">Kota Malang</option>
+            <option value="batu_city.gpkg">Kota Batu</option>
+            <option value="pasuruan_regency.gpkg">Kabupaten Pasuruan</option>
+            <option value="pasuruan_city.gpkg">Kota Pasuruan</option>
+            
+        </select>
+        <input id="search-box" type="text" placeholder="Search for a place" />
+        <button id="count-button" disabled>Count Buildings</button>
+        <button id="clear-button">Hapus Polygon</button>
+        <span id="notification"></span>
+    </div>
+    <div id="result-container">
+        <span id="result-label">Hasil:</span>
+        <span id="result-box">--</span>
+    </div>
+    <div id="map"></div>
+
+    <script>
+        let map, drawingManager, drawnPolygon = null, searchBox;
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: -7.983908, lng: 112.621391 },
+                zoom: 13
+            });
+
+            // Initialize Drawing Manager
+            drawingManager = new google.maps.drawing.DrawingManager({
+                drawingMode: google.maps.drawing.OverlayType.POLYGON,
+                drawingControl: true,
+                drawingControlOptions: {
+                    position: google.maps.ControlPosition.TOP_CENTER,
+                    drawingModes: ['polygon']
+                },
+                polygonOptions: {
+                    editable: true
+                }
+            });
+
+            drawingManager.setMap(map);
+
+            // Add listener for polygon completion
+            google.maps.event.addListener(drawingManager, 'polygoncomplete', function (polygon) {
+                if (drawnPolygon) {
+                    drawnPolygon.setMap(null);
+                }
+                drawnPolygon = polygon;
+                document.getElementById('count-button').disabled = false;
+            });
+
+            // Initialize Search Box
+            const input = document.getElementById('search-box');
+            searchBox = new google.maps.places.SearchBox(input);
+
+            map.controls[google.maps.ControlPosition.TOP_LEFT].push(input);
+
+            // Bias the SearchBox results towards current map's viewport.
+            map.addListener('bounds_changed', function () {
+                searchBox.setBounds(map.getBounds());
+            });
+
+            // Listen for place selection
+            searchBox.addListener('places_changed', function () {
+                const places = searchBox.getPlaces();
+                if (places.length === 0) {
+                    return;
+                }
+
+                // Focus map on the selected place
+                const bounds = new google.maps.LatLngBounds();
+                places.forEach(function (place) {
+                    if (!place.geometry) {
+                        console.log('Returned place contains no geometry');
+                        return;
+                    }
+
+                    if (place.geometry.viewport) {
+                        bounds.union(place.geometry.viewport);
+                    } else {
+                        bounds.extend(place.geometry.location);
+                    }
+                });
+                map.fitBounds(bounds);
+            });
+
+            // Clear Polygon button
+            document.getElementById('clear-button').addEventListener('click', () => {
+                if (drawnPolygon) {
+                    drawnPolygon.setMap(null);
+                    drawnPolygon = null;
+                    document.getElementById('count-button').disabled = true;
+                    document.getElementById('result-box').innerText = '--';
+                }
+            });
+        }
+
+        // Count Buildings
+        document.getElementById('count-button').addEventListener('click', () => {
+            if (!drawnPolygon) {
+                alert('Please draw a polygon first.');
+                return;
+            }
+
+            const locationSelector = document.getElementById('location-selector');
+            const selectedFile = locationSelector.value;
+
+            const vertices = drawnPolygon.getPath();
+            const geoJson = {
+                type: 'Polygon',
+                coordinates: [[]]
+            };
+
+            vertices.forEach(function (latLng) {
+                geoJson.coordinates[0].push([latLng.lng(), latLng.lat()]);
+            });
+            geoJson.coordinates[0].push(geoJson.coordinates[0][0]); // Close the polygon
+
+            const notification = document.getElementById('notification');
+            notification.innerText = 'Processing...';
+
+            fetch('/count', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ drawn_polygon: geoJson, selected_file: selectedFile })
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    notification.innerText = '';
+                    const resultBox = document.getElementById('result-box');
+                    if (data.error) {
+                        resultBox.innerText = 'Error';
+                        console.error('Error:', data.error);
+                    } else {
+                        resultBox.innerText = data.count;
+                    }
+                })
+                .catch(error => {
+                    notification.innerText = 'Error processing request.';
+                    console.error('Error:', error);
+                });
+        });
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>
